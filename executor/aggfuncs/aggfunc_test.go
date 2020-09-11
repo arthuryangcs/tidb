@@ -806,6 +806,58 @@ func (s *testSuite) testMultiArgsAggFunc(c *C, p multiArgsAggTest) {
 	c.Assert(result, Equals, 0)
 }
 
+func (s *testSuite) testMultiArgsAggFuncWithoutDistinct(c *C, p multiArgsAggTest) {
+	srcChk := p.genSrcChk()
+
+	args := make([]expression.Expression, len(p.dataTypes))
+	for k := 0; k < len(p.dataTypes); k++ {
+		args[k] = &expression.Column{RetType: p.dataTypes[k], Index: k}
+	}
+	if p.funcName == ast.AggFuncGroupConcat {
+		args = append(args, &expression.Constant{Value: types.NewStringDatum(separator), RetType: types.NewFieldType(mysql.TypeString)})
+	}
+
+	desc, err := aggregation.NewAggFuncDesc(s.ctx, p.funcName, args, false)
+	c.Assert(err, IsNil)
+	if p.orderBy {
+		desc.OrderByItems = []*util.ByItems{
+			{Expr: args[0], Desc: true},
+		}
+	}
+	finalFunc := aggfuncs.Build(s.ctx, desc, 0)
+	finalPr, _ := finalFunc.AllocPartialResult()
+	resultChk := chunk.NewChunkWithCapacity([]*types.FieldType{desc.RetTp}, 1)
+
+	iter := chunk.NewIterator4Chunk(srcChk)
+	for row := iter.Begin(); row != iter.End(); row = iter.Next() {
+		finalFunc.UpdatePartialResult(s.ctx, []chunk.Row{row}, finalPr)
+	}
+	p.messUpChunk(srcChk)
+	finalFunc.AppendFinalResult2Chunk(s.ctx, finalPr, resultChk)
+	dt := resultChk.GetRow(0).GetDatum(0, desc.RetTp)
+	result, err := dt.CompareDatum(s.ctx.GetSessionVars().StmtCtx, &p.results[1])
+	c.Assert(err, IsNil)
+	c.Assert(result, Equals, 0, Commentf("%v != %v", dt.String(), p.results[1]))
+
+	// test the empty input
+	resultChk.Reset()
+	finalFunc.ResetPartialResult(finalPr)
+	finalFunc.AppendFinalResult2Chunk(s.ctx, finalPr, resultChk)
+	dt = resultChk.GetRow(0).GetDatum(0, desc.RetTp)
+	result, err = dt.CompareDatum(s.ctx.GetSessionVars().StmtCtx, &p.results[0])
+	c.Assert(err, IsNil)
+	c.Assert(result, Equals, 0, Commentf("%v != %v", dt.String(), p.results[0]))
+
+	// test the empty input
+	resultChk.Reset()
+	finalFunc.ResetPartialResult(finalPr)
+	finalFunc.AppendFinalResult2Chunk(s.ctx, finalPr, resultChk)
+	dt = resultChk.GetRow(0).GetDatum(0, desc.RetTp)
+	result, err = dt.CompareDatum(s.ctx.GetSessionVars().StmtCtx, &p.results[0])
+	c.Assert(err, IsNil)
+	c.Assert(result, Equals, 0)
+}
+
 func (s *testSuite) testMultiArgsAggMemFunc(c *C, p multiArgsAggMemTest) {
 	srcChk := p.multiArgsAggTest.genSrcChk()
 
